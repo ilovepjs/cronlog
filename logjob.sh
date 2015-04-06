@@ -3,7 +3,7 @@ cd REPOSITORY_PATH
 
 date=$(date +%Y-%m-%d)
 
-if [ 2 -gt 4 ] || [ 32 -gt 5 ];
+if [ date -lt START_DATE ] || [ date -gt END_DATE ];
 then
     exit
 fi
