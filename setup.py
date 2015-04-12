@@ -4,10 +4,12 @@ import subprocess
 import fileinput
 import json
 import os
+from urllib2 import urlopen, Request, HTTPError
 
 
 GITHUB_URL = 'https://api.github.com/user/repos'
-DIR_PATH = ''
+CRON_SCRIPT_FILE = 'logjob.sh'
+GITHUB_ACCESS_TOKEN_URL = 'https://github.com/settings/applications'
 
 TYPE = {
     'START_DATE': 'When would you like to start logs? [YYYY-MM-DD] : ',
@@ -16,115 +18,112 @@ TYPE = {
     'NAME': 'Enter a name for your repository: ',
     'PRIVATE': 'Would you like it private or public: ',
     'TIME': 'What time would you like to be reminded?\nEnter time in a digital'
-            ' format E.G. 13:45 : ',
+            + ' format E.G. 13:45 : ',
     'BAD_GITHUB_CRED': 'Bad credentials',
+    'ACCESS_TOKEN': 'If you have Github 2Factor enabled please enter your '
+                    + 'access token now. See {}. If not just press enter.\n'
+                    .format(GITHUB_ACCESS_TOKEN_URL) + 'Github access token: ',
 }
 
 
-def set_dir_path(repository_name):
-    global DIR_PATH
-    DIR_PATH = '{}/{}'.format(os.getcwd(), repository_name)
-
-
-def get(key, invalid=True):
+def get_and_validate(key, invalidator, formattor):
     value = raw_input(TYPE[key])
-    while invalid(value):
+    while invalidator(value):
         value = raw_input(TYPE[key])
-    return value
+    return formattor(value)
+
+
+def private_formattor(value):
+    return value == 'private'
 
 
 def validate_private(value):
     value = value.lower()
-    print(value)
     return value != 'private' and value != 'public'
 
 
-def date(date):
-    return datetime.strptime(date, '%Y-%m-%d')
+def date_formattor(date):
+    return datetime.strptime(date, '%Y-%m-%d').strftime('%Y%m%d')
 
 
 def validate_date(d):
     try:
-        date(d)
+        date_formattor(d)
         return False
     except ValueError:
         return True
 
 
-def time(time):
-    return datetime.strptime(time, '%H:%M')
+def time_formattor(time):
+    time = datetime.strptime(time, '%H:%M')
+    return time.hour, time.minute
 
 
 def validate_time(t):
     try:
-        time(t)
+        time_formattor(t)
         return False
     except ValueError:
         return True
 
 
-def cron_job(minutes, hours, start_date, end_date, repository_name):
-    cron_path = '{}/logjob.sh'.format(os.path.dirname(os.path.realpath
-                                                      (__file__)))
+def cron_job(minutes, hours, start_date, end_date, dir_path, repository_name):
+    cron_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             CRON_SCRIPT_FILE)
 
     for line in fileinput.input(cron_path, inplace=True):
-        print(line.replace('REPOSITORY_PATH', DIR_PATH).replace(
+        print(line.replace('REPOSITORY_PATH', dir_path).replace(
               'END_DATE', str(end_date)).replace(
+              'CRON_SCRIPT_FILE', CRON_SCRIPT_FILE).replace(
               'START_DATE', str(start_date)), end='')
 
     timing_sequence = '{} {} * * 1-5'.format(minutes, hours)
     subprocess.check_call(['chmod', '+x', cron_path])
     cron = '"{} {}"'.format(timing_sequence, cron_path)
 
-    # FIX THIS
-    # c1 = ['crontab', '-l']
-    # c2 = ['{', 'cat', ';', 'echo', cron, ';', '}']
-    # c3 = ['crontab', '-']
-
-    # p1 = subprocess.Popen(c1, shell=True, stdout=subprocess.PIPE)
-    # p2 = subprocess.Popen(c2, shell=True, stdin=p1.stdout,
-    #                       stdout=subprocess.PIPE)
-    # p3 = subprocess.Popen(c3, shell=True, stdin=p2.stdout)
-    # p3.communicate()
-
     cmd = 'crontab -l | {{ cat; echo {}; }} | crontab -'.format(cron)
     subprocess.check_call(cmd, shell=True)
 
 
-def make_repo(handle, name, private):
-    if private == 'private':
-        private = True
-
+def make_repo(handle, name, private, access_token):
     data = {
         'name': name,
+        'login': handle,
         'private': private,
         'description': 'Internship daily log diary.'
     }
-    cmd = ['curl', '-u', handle, '-d', json.dumps(data), GITHUB_URL]
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
-    stdout = json.loads(p.communicate()[0])
 
-    if TYPE['BAD_GITHUB_CRED'] in stdout:
-        print('Repository creation failed, please try again.')
+    request = Request(GITHUB_URL, json.dumps(data))
+
+    if access_token is not None:
+        auth_token = 'token {}'.format(access_token)
+        request.add_header("Authorization", auth_token)
+
+    try:
+        response = urlopen(request)
+    except HTTPError, error:
+        print(error.read())
         exit(0)
 
-    cmd = ['git', 'clone', stdout['ssh_url']]
+    response_data = json.loads(response.read())
+    cmd = ['git', 'clone', response_data['ssh_url']]
     subprocess.check_call(cmd)
 
 
 def main():
     handle = raw_input(TYPE['HANDLE'])
     repo_name = raw_input(TYPE['NAME'])
-    private = get('PRIVATE', validate_private)
+    access_token = raw_input(TYPE['ACCESS_TOKEN'])
+    private = get_and_validate('PRIVATE', validate_private, private_formattor)
 
-    set_dir_path(repo_name)
-    make_repo(handle, repo_name, private)
+    make_repo(handle, repo_name, private, access_token)
 
-    start_date = date(get('START_DATE', validate_date))
-    end_date = date(get('END_DATE', validate_date))
-    hours, minutes = get('TIME', validate_time).split(':')
+    start_date = get_and_validate('START_DATE', validate_date, date_formattor)
+    end_date = get_and_validate('END_DATE', validate_date, date_formattor)
+    hours, minutes = get_and_validate('TIME', validate_time, time_formattor)
 
-    cron_job(minutes, hours, start_date, end_date, repo_name)
+    dir_path = os.path.join(os.getcwd(), repo_name)
+    cron_job(minutes, hours, start_date, end_date, dir_path, repo_name)
 
     print('And you\'re done.')
     print('Goodbye')
@@ -132,7 +131,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-# TODO: validate datetime correctly, fails on an enter press
-# TODO: check git repo creation properly
-# TODO: move the script to external location?

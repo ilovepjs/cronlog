@@ -1,16 +1,23 @@
 #!/bin/bash
 cd REPOSITORY_PATH
 
-date=$(date +%Y-%m-%d)
+formatted_date=$(date +%Y%m%d)
 
-if [ date -lt START_DATE ] || [ date -gt END_DATE ];
+if [ $formatted_date -gt END_DATE ];
+then
+    crontab -l | sed '/.*logjob.sh.*/d' | crontab -
+    exit
+fi
+
+
+if [ $formatted_date -lt START_DATE ];
 then
     exit
 fi
 
-file=REPOSITORY_PATH/$date.txt
+file=REPOSITORY_PATH/$formatted_date.txt
 
-echo 'Internship daily log diary ['$date']' >> $file
+echo 'Internship daily log diary ['$(date)']' >> $file
 echo 'This will auto-commit on save.' >> $file
 
 echo 'lsof -c TextEdit | grep '$file
@@ -29,5 +36,5 @@ do
 done
 
 git add .
-git commit -am $date
+git commit -am $formatted_date
 git push origin master
